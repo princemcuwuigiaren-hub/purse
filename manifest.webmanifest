@@ -2,7 +2,7 @@
   "name": "Purse",
   "short_name": "Purse",
   "description": "Track what you receive and spend. Private, offline, and yours.",
-  "start_url": "purse.html",
+  "start_url": "./",
   "scope": "./",
   "display": "standalone",
   "orientation": "portrait",
