@@ -7,21 +7,31 @@ Offline-first personal finance PWA. Everything stays on the device.
 PROJECT NOTE (for future sessions, not shown in the app)
 ---------------------------------------------------------
 Files: index.html (this file), sw.js, manifest.webmanifest, icons/*
-Status: v1.0.0 first build. Verified in the dev environment (headless
-Chrome, 143 automated checks in tests/e2e.py); real-device testing pending.
-Run tests: bash build.sh && python3 tests/e2e.py (needs Playwright + Chrome).
+Status: v1.1.0. Verified in the dev environment (headless Chrome, 143 checks
+in tests/e2e.py plus 76 in tests/e2e2.py); real-device testing pending.
+Run tests: bash build.sh && python3 tests/e2e.py && python3 tests/e2e2.py
+(needs Playwright + Chrome; run them one at a time, both use port 8765).
 
 Known issues / open items
-- UNRESOLVED, seen once: in one two-window run a record was saved with a
-  blank note. Not reproduced in 14 stress runs and 2 further full runs.
-  Cause not identified. Severity: minor (data not lost), watch for it.
+- Blank-note mystery (v1.0, seen once): probable cause found in v1.1. The
+  sheet's 70 ms autofocus could steal focus from a field a fast bot had just
+  tapped, so the typed text went nowhere. Fixed (focus is no longer pulled
+  from a focused field); 24 stress runs clean afterwards. Not seen by hand.
+- Passcode lock is a SCREEN LOCK, not encryption. Records stay readable in
+  browser storage for anyone with the unlocked phone's browser tools, and
+  backup/CSV files are not protected. Forgotten passcode: reset erases the
+  records on the phone (restore from a backup file). Needs the client's OK.
+- Lock needs a secure context (https or localhost) for WebCrypto.
 - Limit warnings (80% / over) fire when adding a record, not when editing.
 - Not tested: real phone, Firefox, Safari, on-screen keyboard behaviour,
-  installed-app back gesture, Play Store / TWA wrapper.
-- Fixed during build: double-tap Save created duplicates; update banner
-  could be missed if a new version was installing during registration; first visit
-  reloaded the page when the service worker took over; all-time search
-  rendered every row (now paged, 150 per page).
+  installed-app back gesture, recents-screen privacy cover, Play Store / TWA.
+- Fixed in v1.1: truncated amount in limit sheet; info popover in the month
+  sheet; delete left its sheet open; manifest id collided with other apps on
+  the same github.io origin (id removed, Chrome now uses start_url).
+
+Data/versions: data version 2 adds optional transaction "time" (HH:MM).
+Lock config lives in its own key "purse.lock.v1" (salted PBKDF2-SHA256,
+never in backups). Records saved before v1.1 have no time.
 
 Architecture decisions
 - Single-file app. Service worker, manifest and icons must be separate
@@ -103,7 +113,8 @@ var m=document.querySelector('meta[name=theme-color]');if(m)m.setAttribute('cont
   --shadow-pop:0 -24px 60px rgba(60,40,5,.25);
   --track:rgba(40,32,12,.09);
 }
-*{box-sizing:border-box}
+*{box-sizing:border-box;scrollbar-width:none}
+*::-webkit-scrollbar{display:none;width:0;height:0}
 html,body{height:100%;margin:0;background:var(--bg);color:var(--text);font:400 16px/1.4 var(--font);-webkit-tap-highlight-color:transparent;overscroll-behavior:none;-webkit-text-size-adjust:100%}
 button,input,select,textarea{font:inherit;color:inherit}
 button{cursor:pointer;border:0;background:none;padding:0;touch-action:manipulation}
@@ -182,6 +193,8 @@ h1,h2,h3,p{margin:0}
 .row .t{font-weight:600;font-size:15.5px;line-height:1.25;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden;overflow-wrap:anywhere}
 .row .s{font-size:12.8px;color:var(--muted);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .row .r{text-align:right;font-weight:650;font-variant-numeric:tabular-nums;font-size:15.5px;white-space:nowrap;display:flex;flex-direction:column;gap:1px}
+.row2{display:grid;grid-template-columns:1.35fr 1fr;gap:10px}
+.row2>.field{min-width:0}
 .row .r small{font-size:12px;font-weight:500;color:var(--faint)}
 .day-h{display:flex;justify-content:space-between;align-items:baseline;padding:20px 4px 6px;font-size:12.5px;color:var(--faint);font-weight:700;letter-spacing:.06em;text-transform:uppercase}
 .day-h span:last-child{letter-spacing:0;text-transform:none;font-variant-numeric:tabular-nums;font-weight:600}
@@ -324,6 +337,27 @@ body.layers-open #toast{z-index:60}
 /* ---------- onboarding / recovery gate ---------- */
 .gate{position:absolute;inset:0;z-index:10;background:var(--bg);overflow-y:auto;padding:calc(var(--sat) + 36px) 22px calc(28px + var(--sab));display:flex;flex-direction:column;gap:22px;
   background-image:radial-gradient(90% 40% at 100% 0%,var(--hero-glow),transparent 70%)}
+/* ---------- passcode lock ---------- */
+.top-r{display:flex;gap:10px}
+.lockscreen{position:absolute;inset:0;z-index:30;background:var(--bg);display:flex;flex-direction:column;align-items:center;justify-content:space-between;gap:14px;padding:calc(var(--sat) + 36px) 22px calc(20px + var(--sab));overflow-y:auto;
+  background-image:radial-gradient(90% 40% at 100% 0%,var(--hero-glow),transparent 70%)}
+.lockscreen:focus{outline:none}
+.lockscreen.shield{z-index:40;justify-content:flex-start}
+.lock-body{display:flex;flex-direction:column;align-items:center;gap:14px;width:100%;max-width:360px}
+.lock-body h1,.pinwrap h1{font-family:var(--font-display);font-size:26px;letter-spacing:-.02em;font-weight:600;text-align:center}
+.pinwrap{display:flex;flex-direction:column;align-items:center;gap:14px;padding-top:8px}
+.dots{display:flex;gap:14px;min-height:16px;justify-content:center}
+.dot{width:14px;height:14px;border-radius:50%;border:2px solid var(--muted);background:transparent;transition:background .12s,border-color .12s}
+.dot.on{background:var(--accent);border-color:var(--accent)}
+.dots.shake{animation:shake .35s}
+@keyframes shake{20%{transform:translateX(-9px)}40%{transform:translateX(9px)}60%{transform:translateX(-6px)}80%{transform:translateX(6px)}}
+@media (prefers-reduced-motion:reduce){.dots.shake{animation:none}}
+.pin-err{min-height:20px;text-align:center}
+.keypad{display:grid;grid-template-columns:repeat(3,72px);gap:12px 18px;justify-content:center}
+.key{width:72px;height:72px;border-radius:50%;background:var(--surface);border:1px solid var(--line);font-size:26px;font-weight:600;color:var(--text);display:grid;place-items:center;font-variant-numeric:tabular-nums}
+.key:active{background:var(--surface-3)}
+.key:disabled{opacity:.45}
+@media (max-height:640px){.keypad{gap:8px 16px}.key{width:60px;height:60px;font-size:22px}.keypad{grid-template-columns:repeat(3,60px)}}
 .gate .brand{font-size:26px}
 .gate h1{font-family:var(--font-display);font-size:38px;line-height:1.05;letter-spacing:-.03em;font-weight:600}
 .gate .lead{color:var(--muted);font-size:16px;max-width:340px}
@@ -351,8 +385,8 @@ body.layers-open #toast{z-index:60}
 /* =====================================================================
    1. CONFIG AND UTILITIES
    ===================================================================== */
-const APP_VERSION = '1.0.0';
-const DATA_VERSION = 1;
+const APP_VERSION = '1.1.0';
+const DATA_VERSION = 2;
 const BACKUP_FORMAT = 1;
 const KEY = 'purse.v1';
 const KEY_PREV = 'purse.v1.prev';
@@ -557,8 +591,22 @@ function freshState() {
     categories: defaultCats(), accounts: [], transactions: [], limits: {}
   };
 }
+/* Upgrades older data one version at a time. Never drops a record.
+   v1 -> v2: records gain an optional time of day ("HH:MM"). For old records it is taken
+   from the moment they were created, but only when that is the same day as the record's date. */
 function migrate(d) {
-  /* v1 is the first schema. Future versions: upgrade step by step here. */
+  if (d.v === 1 && Array.isArray(d.transactions)) {
+    for (const t of d.transactions) {
+      if (!isObj(t) || t.time !== undefined) continue;
+      let time = null;
+      if (Number.isFinite(t.createdAt) && t.createdAt > 0) {
+        const c = new Date(t.createdAt);
+        if (ymd(c.getFullYear(), c.getMonth(), c.getDate()) === t.date) time = pad(c.getHours()) + ':' + pad(c.getMinutes());
+      }
+      t.time = time;
+    }
+    d.v = 2;
+  }
   return d;
 }
 /* Strict validation. Returns {ok:true, data:<clean copy>} or {ok:false, error}. */
@@ -603,9 +651,11 @@ function validateData(input) {
     if (!kind || (t.type === 'in') !== (kind === 'income')) return bad('A transaction points to a missing category.');
     if (t.acct !== null && t.acct !== undefined && !accts.has(t.acct)) return bad('A transaction points to a missing account.');
     if (!validYmd(t.date)) return bad('A transaction date is invalid.');
+    let time = null;
+    if (t.time !== null && t.time !== undefined) { if (typeof t.time !== 'string' || !/^([01]\d|2[0-3]):[0-5]\d$/.test(t.time)) return bad('A transaction time is invalid.'); time = t.time; }
     const note = typeof t.note === 'string' ? t.note.slice(0, 200) : '';
     const created = Number.isFinite(t.createdAt) ? t.createdAt : 0;
-    outTx.push({ id: t.id, type: t.type, amount: t.amount, cat: t.cat, acct: t.acct || null, date: t.date, note, createdAt: created, updatedAt: Number.isFinite(t.updatedAt) ? t.updatedAt : created });
+    outTx.push({ id: t.id, type: t.type, amount: t.amount, cat: t.cat, acct: t.acct || null, date: t.date, time, note, createdAt: created, updatedAt: Number.isFinite(t.updatedAt) ? t.updatedAt : created });
   }
   const limits = {};
   for (const k of Object.keys(d.limits)) {
@@ -654,7 +704,10 @@ function loadState() {
   if (prev) return { state: prev, note: 'recovered', corruptRaw: rawMain };
   return { state: null, note: 'corrupt', corruptRaw: rawMain };
 }
-const sortedTx = () => S.transactions.slice().sort((a, b) => a.date < b.date ? 1 : a.date > b.date ? -1 : b.createdAt - a.createdAt);
+const sortedTx = () => S.transactions.slice().sort((a, b) => a.date < b.date ? 1 : a.date > b.date ? -1 : (a.time || '') < (b.time || '') ? 1 : (a.time || '') > (b.time || '') ? -1 : b.createdAt - a.createdAt);
+const nowTime = () => { const d = new Date(); return pad(d.getHours()) + ':' + pad(d.getMinutes()); };
+function fmtTime(hhmm) { if (!hhmm) return ''; const [h, m] = hhmm.split(':').map(Number); try { return new Date(2000, 0, 1, h, m).toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' }); } catch (e) { return hhmm; } }
+function fmtStamp(ms) { const d = new Date(ms); return `${fmtShort(ymd(d.getFullYear(), d.getMonth(), d.getDate()))}, ${fmtTime(pad(d.getHours()) + ':' + pad(d.getMinutes()))}`; }
 const catById = id => S.categories.find(c => c.id === id) || { id, name: 'Unknown', icon: 'tag', color: '#8FA0B8', kind: 'expense', archived: true };
 const acctById = id => S.accounts.find(a => a.id === id) || null;
 const spendCats = () => S.categories.filter(c => c.kind === 'expense');
@@ -674,7 +727,7 @@ let tabPushed = false;
 const reducedMotion = () => window.matchMedia && matchMedia('(prefers-reduced-motion: reduce)').matches;
 
 function updateInert() {
-  const open = layers.length > 0 || !!$('.gate');
+  const open = layers.length > 0 || !!$('.gate') || !!lockEl;
   $('#view').inert = open; $('#tabbar').inert = open;
   layers.forEach((l, i) => { l.el.inert = i !== layers.length - 1; });
 }
@@ -686,7 +739,7 @@ function pushLayer({ kind, el, onClose, refresh }) {
   updateInert();
   raf2(() => el.classList.add('in'));
   setTimeout(() => {
-    if (!el.isConnected) return;
+    if (!el.isConnected || (el.contains(document.activeElement) && document.activeElement !== el)) return;   // never pull focus away from a field the person already tapped
     const f = el.querySelector('[data-autofocus]') || el.querySelector('.sheet,.page,.dialog');
     if (f) f.focus({ preventScroll: true });
   }, 70);
@@ -714,10 +767,12 @@ function closeLayer() {
   if (closing) return closing;
   const top = layers[layers.length - 1];
   closing = new Promise(res => {
-    closeWaiters.push(res);
+    /* Release the guard BEFORE waiting callers continue, so a caller that closes
+       another layer right after this one (confirm dialog, then its sheet) is not ignored. */
+    closeWaiters.push(() => { closing = null; res(); });
     history.back();
     setTimeout(() => { if (layers.includes(top)) { removeLayer(layers.pop()); flushWaiters(); } }, 600);
-  }).then(() => { closing = null; });
+  });
   return closing;
 }
 function setTab(t) {
@@ -760,13 +815,16 @@ function toast(msg, { action = null, ms = 4400, kind = '' } = {}) {
   box.appendChild(t); clearTimeout(toastTimer);
   toastTimer = setTimeout(() => { box.innerHTML = ''; }, ms);
 }
-const infoBtn = text => `<button type="button" class="info" data-info aria-expanded="false" aria-label="More information">${ico('info', 18)}</button><div class="pop" hidden>${esc(text)}</div>`;
+let infoSeq = 0;
+/* Tap-to-reveal explanation. The popover is found by id, so it works wherever the markup is placed. */
+const infoBtn = text => { const id = 'pop' + (++infoSeq); return `<button type="button" class="info" data-info aria-expanded="false" aria-controls="${id}" aria-label="More information">${ico('info', 18)}</button><div class="pop" id="${id}" role="note" hidden>${esc(text)}</div>`; };
+const popOf = b => document.getElementById(b.getAttribute('aria-controls'));
 
 /* Global delegated behaviour */
 document.addEventListener('click', e => {
   const inf = e.target.closest('[data-info]');
-  $$('[data-info][aria-expanded=true]').forEach(b => { if (b !== inf) { b.setAttribute('aria-expanded', 'false'); if (b.nextElementSibling) b.nextElementSibling.hidden = true; } });
-  if (inf) { const open = inf.getAttribute('aria-expanded') !== 'true'; inf.setAttribute('aria-expanded', String(open)); inf.nextElementSibling.hidden = !open; return; }
+  $$('[data-info][aria-expanded=true]').forEach(b => { if (b !== inf) { b.setAttribute('aria-expanded', 'false'); const p = popOf(b); if (p) p.hidden = true; } });
+  if (inf) { const open = inf.getAttribute('aria-expanded') !== 'true', p = popOf(inf); inf.setAttribute('aria-expanded', String(open)); if (p) p.hidden = !open; return; }
   if (e.target.closest('#layers') && e.target.closest('[data-close]')) closeLayer();
 });
 document.addEventListener('keydown', e => {
@@ -837,14 +895,14 @@ function periodNav() {
     <div class="label" aria-live="polite">${isCur ? '<small>This period</small>' : ''}${esc(periodLabel(p, sd))}</div>
     <button type="button" data-act="next" aria-label="Next period" ${ui.offset >= maxOffset() ? 'disabled' : ''}>${ico('chevR', 20)}</button></div>`;
 }
-const gear = () => `<button type="button" class="icon-btn" data-act="settings" aria-label="Settings">${ico('sliders', 21)}</button>`;
+const gear = () => `<div class="top-r">${lockCfg ? `<button type="button" class="icon-btn" data-act="locknow" aria-label="Lock Purse now">${ico('lock', 21)}</button>` : ''}<button type="button" class="icon-btn" data-act="settings" aria-label="Settings">${ico('sliders', 21)}</button></div>`;
 
 function txRow(t, { showDate = false } = {}) {
   const c = catById(t.cat), a = t.acct ? acctById(t.acct) : null, inc = t.type === 'in';
   const sub = [c.name, a ? a.name : null, showDate ? fmtShort(t.date) : null].filter(Boolean).join(' · ');
   return `<button type="button" class="row" data-edit="${esc(t.id)}"><span class="tile" style="--c:${esc(c.color)}">${ico(c.icon, 21)}</span>
     <span class="mid"><span class="t">${esc(t.note || c.name)}</span><span class="s">${esc(sub)}</span></span>
-    <span class="r ${inc ? 'pos' : ''}">${money(inc ? t.amount : -t.amount, { plus: inc })}</span></button>`;
+    <span class="r ${inc ? 'pos' : ''}">${money(inc ? t.amount : -t.amount, { plus: inc })}${t.time ? `<small>${esc(fmtTime(t.time))}</small>` : ''}</span></button>`;
 }
 function emptyState(icon, title, text, cta) {
   return `<div class="empty"><div class="badge">${ico(icon, 30)}</div><h3>${esc(title)}</h3><p>${esc(text)}</p>${cta || ''}</div>`;
@@ -1004,7 +1062,7 @@ function viewInsights() {
 
 /* ---------------- RENDER ---------------- */
 function render() {
-  if (!S) return;
+  if (!S || locked) return;
   const view = $('#view'), keep = lastRenderedTab === ui.tab ? view.scrollTop : 0;
   const fn = { home: viewHome, activity: viewActivity, limits: viewLimits, insights: viewInsights }[ui.tab];
   view.innerHTML = fn();
@@ -1033,6 +1091,7 @@ $('#view').addEventListener('click', e => {
     case 'more': ui.filter.limit = (ui.filter.limit || PAGE) + PAGE; $('#actlist').innerHTML = activityList(); break;
     case 'add': openTxSheet(null); break;
     case 'settings': openSettings(); break;
+    case 'locknow': lock(); break;
     case 'newlimit': openLimitSheet(null, true); break;
     case 'backup': doBackup(); break;
     case 'snooze': S.settings.remindAfter = Date.now() + 3 * 864e5; commit(); break;
@@ -1057,7 +1116,12 @@ function fmtAmountInput(str) {
   i = i.replace(/^0+(?=\d)/, '').slice(0, 11);
   return i.replace(/\B(?=(\d{3})+(?!\d))/g, ',') + (dec && v.includes('.') ? '.' + f : '');
 }
-const sizeAmount = input => { input.style.width = Math.max(2, input.value.length) + 0.6 + 'ch'; };
+/* Sizes the amount box to its text and shrinks the type for long numbers so nothing is ever cut off. */
+const sizeAmount = input => {
+  const len = Math.max(2, input.value.length), avail = Math.min(window.innerWidth - 130, 340);
+  input.style.fontSize = Math.max(22, Math.min(46, avail / ((len + 0.6) * 0.62))) + 'px';
+  input.style.width = len + 0.6 + 'ch';
+};
 function bindAmountInput(input, errEl, autosize = false) {
   input.addEventListener('input', () => { input.value = fmtAmountInput(input.value); input.removeAttribute('aria-invalid'); if (errEl) errEl.textContent = ''; if (autosize) sizeAmount(input); });
   if (autosize) sizeAmount(input);
@@ -1095,11 +1159,11 @@ function openTxSheet(id) {
     <div class="seg" role="group" aria-label="Record type"><button type="button" data-kind="out" data-type="out">${ico('arrowUp', 18)}Spent</button><button type="button" data-kind="in" data-type="in">${ico('arrowDown', 18)}Received</button></div>
     <div><div class="amount-box"><span class="cur" aria-hidden="true">${esc(sym)}</span><input id="f-amt" inputmode="${curDigits(S.settings.currency) === 0 ? 'numeric' : 'decimal'}" autocomplete="off" aria-label="Amount" placeholder="0" data-autofocus></div><div class="err" id="f-err" role="alert" style="text-align:center"></div></div>
     <div class="field"><span class="lbl">Category</span><div id="f-cats" class="chips" role="radiogroup" aria-label="Category"></div></div>
-    <div class="field"><label for="f-date">Date</label><input id="f-date" class="input date-input" type="date" min="1970-01-01" max="2200-12-31">
+    <div class="field"><div class="row2"><div class="field"><label for="f-date">Date</label><input id="f-date" class="input date-input" type="date" min="1970-01-01" max="2200-12-31"></div><div class="field"><label for="f-time">Time</label><input id="f-time" class="input date-input" type="time"></div></div>
       <div class="chips" id="f-quick" style="margin-top:2px"><button type="button" class="chip" data-q="0">Today</button><button type="button" class="chip" data-q="-1">Yesterday</button></div></div>
     <div class="field"><label for="f-note">Note (optional)</label><input id="f-note" class="input" type="text" maxlength="200" autocomplete="off" enterkeyhint="done"></div>
     <div class="field"><span class="lbl">Bank or account (optional) ${infoBtn('Tag the bank or wallet you used. It is only for your own reference, and you can leave it empty.')}</span><div id="f-accts" class="chips" role="radiogroup" aria-label="Bank or account"></div></div>
-    ${editing ? `<button type="button" class="btn danger block" id="f-del">${ico('trash', 19)}Delete record</button>` : ''}`;
+    ${editing ? `<button type="button" class="btn danger block" id="f-del">${ico('trash', 19)}Delete record</button>${editing.createdAt ? `<p class="note-text" style="text-align:center">Added ${esc(fmtStamp(editing.createdAt))}</p>` : ''}` : ''}`;
   const footer = `<button type="button" class="btn primary block" id="f-save">${editing ? 'Save changes' : 'Save record'}</button>`;
   const drawCats = () => {
     const kind = st.type === 'in' ? 'income' : 'expense';
@@ -1125,9 +1189,10 @@ function openTxSheet(id) {
     refresh: () => { if (root) drawAccts(); },
     onMount: el => {
       root = el;
-      const amt = $('#f-amt', el), err = $('#f-err', el), dateEl = $('#f-date', el), note = $('#f-note', el);
+      const amt = $('#f-amt', el), err = $('#f-err', el), dateEl = $('#f-date', el), timeEl = $('#f-time', el), note = $('#f-note', el);
       bindAmountInput(amt, err, true);
       dateEl.value = editing ? editing.date : todayStr();
+      timeEl.value = editing ? (editing.time || '') : nowTime();
       if (editing) { amt.value = fmtAmountInput(minorToInput(editing.amount)); sizeAmount(amt); note.value = editing.note || ''; }
       drawType(); drawAccts(); drawQuick();
       dateEl.addEventListener('input', drawQuick);
@@ -1141,7 +1206,7 @@ function openTxSheet(id) {
         else if (b.id === 'f-save') save();
         else if (b.id === 'f-del') del();
       });
-      el.addEventListener('keydown', e => { if (e.key === 'Enter' && e.target.tagName === 'INPUT' && e.target.id !== 'f-date') { e.preventDefault(); save(); } });
+      el.addEventListener('keydown', e => { if (e.key === 'Enter' && e.target.tagName === 'INPUT' && e.target.id !== 'f-date' && e.target.id !== 'f-time') { e.preventDefault(); save(); } });
       let busy = false;   // a second tap while the sheet is closing must not save twice
       function save() {
         if (busy) return;
@@ -1149,7 +1214,7 @@ function openTxSheet(id) {
         if (!r.ok) return failField(amt, err, r.error);
         if (!st.cat) return toast('Add a category first, in Settings.', { kind: 'bad' });
         if (!validYmd(dateEl.value)) return toast('Choose a valid date.', { kind: 'bad' });
-        const fields = { type: st.type, amount: r.minor, cat: st.cat, acct: st.acct || null, date: dateEl.value, note: note.value.trim().slice(0, 200) };
+        const fields = { type: st.type, amount: r.minor, cat: st.cat, acct: st.acct || null, date: dateEl.value, time: /^([01]\d|2[0-3]):[0-5]\d$/.test(timeEl.value) ? timeEl.value : null, note: note.value.trim().slice(0, 200) };
         busy = true;
         let notice = null;
         if (editing) Object.assign(editing, fields, { updatedAt: Date.now() });
@@ -1224,8 +1289,8 @@ function openLimitSheet(id, isNew = false) {
     title, body, footer: '<button type="button" class="btn primary block" id="l-save">Save limit</button>',
     onMount: el => {
       const amt = $('#l-amt', el), err = $('#l-err', el), hint = $('#l-hint', el);
-      bindAmountInput(amt, err);
-      if (exists) amt.value = fmtAmountInput(minorToInput(S.limits[id]));
+      bindAmountInput(amt, err, true);
+      if (exists) { amt.value = fmtAmountInput(minorToInput(S.limits[id])); sizeAmount(amt); }
       const showHint = () => {
         if (!st.id) { hint.textContent = ''; return; }
         const sd = S.settings.monthStart, prev = summarize(periodOf(shiftKey(currentKey(), -1), sd));
@@ -1255,7 +1320,7 @@ function openLimitSheet(id, isNew = false) {
 function openMonthSheet(current, onPick) {
   openSheet({
     title: 'Month starts on',
-    body: `<p class="muted" style="font-size:14.5px">Pick the day your money cycle begins, such as payday. ${infoBtn('If you are paid on the 25th, choose 25 and each period will run from payday to payday. In shorter months, a period that starts on the 29th, 30th or 31st begins on the last day of that month.')}</p>
+    body: `<div class="muted" style="font-size:14.5px">Pick the day your money cycle begins, such as payday. ${infoBtn('If you are paid on the 25th, choose 25 and each period will run from payday to payday. In shorter months, a period that starts on the 29th, 30th or 31st begins on the last day of that month.')}</div>
       <div class="daygrid" role="group" aria-label="Day of the month">${Array.from({ length: 31 }, (_, i) => `<button type="button" data-day="${i + 1}" aria-pressed="${current === i + 1}">${i + 1}</button>`).join('')}</div>`,
     onMount: el => el.addEventListener('click', e => { const b = e.target.closest('[data-day]'); if (b) closeLayer().then(() => onPick(+b.dataset.day)); })
   });
@@ -1368,7 +1433,10 @@ function openSettings() {
     <div class="card" style="padding:14px 16px;display:flex;flex-direction:column;gap:10px"><span class="lbl">Appearance</span><div class="seg" role="group" aria-label="Appearance">${[['auto', 'Auto', 'globe'], ['dark', 'Dark', 'moon'], ['light', 'Light', 'sun']].map(([v, l, i]) => `<button type="button" data-theme-set="${v}" aria-pressed="${th === v}">${ico(i, 17)}${l}</button>`).join('')}</div></div>
     <div class="card">${row('categories', 'grid', 'Categories', 'Add, edit or archive')}${row('accounts', 'bank', 'Banks and accounts', `${S.accounts.length} added`)}</div>
     <h3 class="eyebrow group-h">Your data</h3>
-    <div class="card">${row('backup', 'download', 'Back up now', lastBackupText())}${row('restore', 'upload', 'Restore from backup', 'Replaces what is on this phone')}${snap ? row('undorestore', 'undo', 'Undo last restore or erase', `Available until ${fmtShort(ymdOf(snap.at + 7 * 864e5))}`) : ''}</div>
+    <div class="card">${row('backup', 'download', 'Back up now', lastBackupText())}${row('restore', 'upload', 'Restore from backup', 'Replaces what is on this phone')}${row('csv', 'list', 'Export as CSV', 'For Excel or Google Sheets')}${snap ? row('undorestore', 'undo', 'Undo last restore or erase', `Available until ${fmtShort(ymdOf(snap.at + 7 * 864e5))}`) : ''}</div>
+    <h3 class="eyebrow group-h">Security</h3>
+    <div class="card">${!lockCfg ? row('lockon', 'lock', 'Passcode lock', 'Ask for a passcode to open Purse', 'Off') : `${row('lockmode', 'gauge', 'Lock the app', '', (LOCK_TIMEOUTS.find(x => x[0] === lockCfg.timeout) || LOCK_TIMEOUTS[0])[1].replace('Every time the app is closed', 'On close').replace('After ', '').replace('minutes', 'min').replace('minute', 'min'))}${row('locknow', 'lock', 'Lock now', 'Lock Purse right away')}${row('lockchange', 'sliders', 'Change passcode', '')}${row('lockoff', 'trash', 'Turn off passcode lock', '')}`}</div>
+    ${lockCfg ? '<p class="note-text" style="padding:0 6px">The passcode keeps other people out of the app. Backup and CSV files you save are not protected by it.</p>' : ''}
     ${installEvt ? `<div class="card">${row('install', 'phone', 'Install Purse', 'Add it to your home screen')}</div>` : ''}
     <div class="card">${row('erase', 'trash', 'Erase all data', 'Removes everything from this phone')}</div>
     <p class="note-text" style="text-align:center;padding-top:6px">Your records stay on this phone and work without internet. Purse never uploads them.<br>Version ${APP_VERSION}</p>`;
@@ -1388,9 +1456,15 @@ function openSettings() {
           case 'accounts': openAccountsPage(); break;
           case 'backup': doBackup(); break;
           case 'restore': openRestoreSheet(); break;
+          case 'csv': openCsvSheet(); break;
           case 'undorestore': undoRestore(); break;
           case 'install': if (installEvt) { installEvt.prompt(); try { await installEvt.userChoice; } catch (x) { /* ignore */ } installEvt = null; layers.forEach(l => l.refresh && l.refresh()); } break;
           case 'erase': eraseAll(); break;
+          case 'lockon': enableLock(); break;
+          case 'lockmode': openAutoLockSheet(); break;
+          case 'locknow': lock(); break;
+          case 'lockchange': changePasscode(); break;
+          case 'lockoff': disableLock(); break;
         }
       });
     }
@@ -1520,6 +1594,326 @@ async function eraseAll() {
   S = freshState(); persist(); afterDataSwap(); showWelcomeGate();
   toast('All data erased', { action: { label: 'Undo', fn: undoRestore }, ms: 8000 });
 }
+
+/* =====================================================================
+   7b. CSV EXPORT  (a readable copy for spreadsheets; not a backup)
+   ===================================================================== */
+/* Text cells starting with = + - @ would run as formulas in Excel or Sheets, so they get a
+   leading apostrophe. Cells with commas, quotes or line breaks are quoted. */
+function csvText(v) {
+  let s = String(v == null ? '' : v);
+  if (/^[=+\-@\t\r]/.test(s)) s = "'" + s;
+  return /[",\r\n]/.test(s) ? '"' + s.replace(/"/g, '""') + '"' : s;
+}
+function csvAmount(minor) { return curDigits(S.settings.currency) === 0 ? String(Math.floor(minor / 100)) : `${Math.floor(minor / 100)}.${pad(minor % 100)}`; }
+function buildCsv(list) {
+  const rows = list.slice().sort((a, b) => a.date < b.date ? -1 : a.date > b.date ? 1 : (a.time || '') < (b.time || '') ? -1 : (a.time || '') > (b.time || '') ? 1 : a.createdAt - b.createdAt);
+  const out = [['Date', 'Time', 'Type', 'Category', 'Amount', 'Currency', 'Bank or account', 'Note', 'Added at (UTC)'].join(',')];
+  for (const t of rows) {
+    out.push([t.date, t.time || '', t.type === 'in' ? 'Income' : 'Expense', csvText(catById(t.cat).name), csvAmount(t.amount), S.settings.currency,
+      csvText(t.acct ? (acctById(t.acct) || { name: '' }).name : ''), csvText(t.note), t.createdAt > 0 ? new Date(t.createdAt).toISOString() : ''].join(','));
+  }
+  return '\uFEFF' + out.join('\r\n') + '\r\n';      // BOM so Excel reads the file as UTF-8
+}
+function openCsvSheet() {
+  const p = selPeriod(), inPeriod = periodTxns(p), all = S.transactions;
+  const st = { scope: 'period' };
+  const canShare = (() => { try { return !!(navigator.canShare && navigator.canShare({ files: [new File(['a'], 'x.csv', { type: 'text/csv' })] })); } catch (e) { return false; } })();
+  openSheet({
+    title: 'Export as CSV',
+    body: `<div class="muted" style="font-size:15px;line-height:1.5">Creates a spreadsheet file you can open in Excel or Google Sheets. It is a readable copy of your records, not a backup, so it cannot be restored into Purse.</div>
+      <div class="seg" role="group" aria-label="Which records"><button type="button" data-scope="period">This period (${inPeriod.length})</button><button type="button" data-scope="all">All records (${all.length})</button></div>
+      <p class="note-text" id="x-note"></p><div class="err" id="x-err" role="alert"></div>`,
+    footer: `<button type="button" class="btn primary block" id="x-save">${ico('download', 20)}Save CSV file</button>${canShare ? `<button type="button" class="btn soft block" id="x-share">${ico('share', 20)}Share CSV</button>` : ''}`,
+    onMount: el => {
+      const note = $('#x-note', el), err = $('#x-err', el);
+      const list = () => st.scope === 'all' ? all : inPeriod;
+      const draw = () => {
+        $$('[data-scope]', el).forEach(b => b.setAttribute('aria-pressed', String(b.dataset.scope === st.scope)));
+        note.textContent = st.scope === 'all' ? 'Every record on this phone.' : periodLabel(p, S.settings.monthStart);
+        err.textContent = list().length ? '' : 'There are no records to export for this choice.';
+        $('#x-save', el).disabled = !list().length; const sh = $('#x-share', el); if (sh) sh.disabled = !list().length;
+      };
+      draw();
+      const name = () => st.scope === 'all' ? `purse-records-all-${todayStr()}.csv` : `purse-records-${p.start}-to-${p.end}.csv`;
+      el.addEventListener('click', async e => {
+        const b = e.target.closest('button'); if (!b) return;
+        if (b.dataset.scope) { st.scope = b.dataset.scope; draw(); }
+        else if (b.id === 'x-save') { try { downloadText(buildCsv(list()), name(), 'text/csv'); } catch (x) { return toast('Could not create the file.', { kind: 'bad' }); } closeLayer().then(() => toast('CSV file created. Check your Downloads.', { ms: 6000 })); }
+        else if (b.id === 'x-share') {
+          try { await navigator.share({ files: [new File([buildCsv(list())], name(), { type: 'text/csv' })], title: 'Purse records' }); closeLayer().then(() => toast('CSV shared')); }
+          catch (x) { if (x && x.name !== 'AbortError') toast('Sharing did not work. Try saving the file instead.', { kind: 'bad' }); }
+        }
+      });
+    }
+  });
+}
+/* =====================================================================
+   7c. PASSCODE LOCK
+   What it is: a screen that keeps other people out of the app on this phone.
+   What it is NOT: encryption. Records stay readable in the browser's storage for anyone
+   who can open the phone's browser tools, and backup/CSV files are not protected by it.
+   The passcode itself is never stored: only a salted PBKDF2-SHA256 hash, in its own
+   storage key (purse.lock.v1) so backups and restores never carry or replace it.
+   ===================================================================== */
+const KEY_LOCK = 'purse.lock.v1';
+const LOCK_TIMEOUTS = [[0, 'Every time the app is closed'], [1, 'After 1 minute'], [5, 'After 5 minutes'], [15, 'After 15 minutes']];
+const PIN_MIN = 4, PIN_MAX = 6, PBKDF2_ITER = 120000;
+const LOCKOUT_SECONDS = [30, 60, 300, 900, 1800];     // after every 5th wrong try in a row
+let lockCfg = null, locked = false, postUnlock = null;
+let lockEl = null, shieldEl = null, activePad = null, lastActive = Date.now(), lastPersist = 0, lockTimer = null, lockPause = 0, lockCountdown = null;
+const lockSupported = () => !!(window.isSecureContext && window.crypto && crypto.subtle);
+
+/* ---------- storage ---------- */
+function loadLock() {
+  let raw; try { raw = localStorage.getItem(KEY_LOCK); } catch (e) { return null; }
+  if (raw === null) return null;
+  try {
+    const o = JSON.parse(raw);
+    const ok = isObj(o) && typeof o.salt === 'string' && typeof o.hash === 'string' && Number.isInteger(o.iter) && o.iter >= 1000 && o.iter <= 2e6 &&
+      Number.isInteger(o.len) && o.len >= PIN_MIN && o.len <= PIN_MAX && [0, 1, 5, 15].includes(o.timeout);
+    if (!ok) return { broken: true, timeout: 0, lastActive: 0, fails: 0, lockoutUntil: 0 };
+    o.fails = Number.isInteger(o.fails) && o.fails >= 0 ? o.fails : 0;
+    o.lockoutUntil = Number.isFinite(o.lockoutUntil) ? o.lockoutUntil : 0;
+    o.lastActive = Number.isFinite(o.lastActive) ? o.lastActive : 0;
+    return o;
+  } catch (e) { return { broken: true, timeout: 0, lastActive: 0, fails: 0, lockoutUntil: 0 }; }
+}
+function saveLock() { if (!lockCfg || lockCfg.broken) return; try { localStorage.setItem(KEY_LOCK, JSON.stringify(lockCfg)); } catch (e) { /* ignore */ } }
+function persistActive(force) { if (!lockCfg || lockCfg.broken || locked) return; const n = Date.now(); if (!force && n - lastPersist < 10000) return; lastPersist = n; lockCfg.lastActive = lastActive; saveLock(); }
+
+/* ---------- hashing ---------- */
+const b64 = buf => btoa(String.fromCharCode.apply(null, Array.from(new Uint8Array(buf))));
+const unb64 = s => Uint8Array.from(atob(s), c => c.charCodeAt(0));
+async function derive(pin, salt, iter) {
+  const key = await crypto.subtle.importKey('raw', new TextEncoder().encode(pin), 'PBKDF2', false, ['deriveBits']);
+  return new Uint8Array(await crypto.subtle.deriveBits({ name: 'PBKDF2', hash: 'SHA-256', salt, iterations: iter }, key, 256));
+}
+async function makeLock(pin, keep) {
+  const salt = crypto.getRandomValues(new Uint8Array(16)), hash = await derive(pin, salt, PBKDF2_ITER);
+  return { v: 1, salt: b64(salt), hash: b64(hash), iter: PBKDF2_ITER, len: pin.length, timeout: keep ? keep.timeout : 1, fails: 0, lockoutUntil: 0, lastActive: Date.now() };
+}
+async function checkPin(pin) {
+  const h = await derive(pin, unb64(lockCfg.salt), lockCfg.iter), want = unb64(lockCfg.hash);
+  let diff = h.length ^ want.length; for (let i = 0; i < h.length && i < want.length; i++) diff |= h[i] ^ want[i];
+  return diff === 0;
+}
+/* One place for the try counter so the lock screen and the settings checks share the same limits. */
+async function attemptPin(pin) {
+  const now = Date.now();
+  if (lockCfg.lockoutUntil > now) return { ok: false, wait: lockCfg.lockoutUntil - now };
+  if (await checkPin(pin)) { lockCfg.fails = 0; lockCfg.lockoutUntil = 0; saveLock(); return { ok: true }; }
+  lockCfg.fails++;
+  if (lockCfg.fails % 5 === 0) lockCfg.lockoutUntil = Date.now() + LOCKOUT_SECONDS[Math.min(lockCfg.fails / 5 - 1, LOCKOUT_SECONDS.length - 1)] * 1000;
+  saveLock();
+  return lockCfg.lockoutUntil > Date.now() ? { ok: false, wait: lockCfg.lockoutUntil - Date.now() } : { ok: false, left: 5 - (lockCfg.fails % 5) };
+}
+const fmtWait = ms => { const s = Math.ceil(ms / 1000); return s >= 60 ? `${Math.floor(s / 60)}:${pad(s % 60)}` : `0:${pad(s)}`; };
+
+/* ---------- keypad ---------- */
+function padHTML(dots) {
+  return `<div class="dots" role="img" aria-label="Passcode digits entered">${Array.from({ length: dots }, () => '<i class="dot"></i>').join('')}</div><span class="sr" aria-live="polite" data-live></span>
+    <p class="err pin-err" role="alert" data-perr></p>
+    <div class="keypad">${[1, 2, 3, 4, 5, 6, 7, 8, 9].map(n => `<button type="button" class="key" data-k="${n}" aria-label="${n}">${n}</button>`).join('')}<span></span><button type="button" class="key" data-k="0" aria-label="0">0</button><button type="button" class="key" data-k="back" aria-label="Delete last digit">${ico('chevL', 24)}</button></div>`;
+}
+function mountPad(root, { dots, max, onInput }) {
+  let digits = '', off = false, count = dots;
+  const draw = () => { $$('.dot', root).forEach((d, i) => d.classList.toggle('on', i < digits.length)); const l = $('[data-live]', root); if (l) l.textContent = `${digits.length} of ${count} digits`; };
+  const api = {
+    get digits() { return digits; },
+    press(k) { if (off || digits.length >= max) return; digits += k; draw(); onInput(digits); },
+    back() { if (off || !digits) return; digits = digits.slice(0, -1); draw(); onInput(digits); },
+    clear() { digits = ''; draw(); },
+    setDots(n) { count = n; max = n; const box = $('.dots', root); box.innerHTML = Array.from({ length: n }, () => '<i class="dot"></i>').join(''); draw(); },
+    disable(b) { off = b; $$('.key', root).forEach(k => { k.disabled = b; }); },
+    error(msg) { const e = $('[data-perr]', root); if (e) e.textContent = msg || ''; },
+    shake() { const d = $('.dots', root); d.classList.remove('shake'); void d.offsetWidth; d.classList.add('shake'); try { navigator.vibrate && navigator.vibrate(60); } catch (e) { /* ignore */ } }
+  };
+  root.addEventListener('click', e => { const k = e.target.closest('.key'); if (!k) return; if (k.dataset.k === 'back') api.back(); else api.press(k.dataset.k); });
+  return api;
+}
+document.addEventListener('keydown', e => {
+  if (!activePad || e.ctrlKey || e.metaKey || e.altKey) return;
+  if (/^\d$/.test(e.key)) { e.preventDefault(); activePad.press(e.key); } else if (e.key === 'Backspace') { e.preventDefault(); activePad.back(); }
+});
+
+/* ---------- the lock screen ---------- */
+function showLockScreen() {
+  if (lockEl) return;
+  const el = document.createElement('div'); el.className = 'lockscreen'; el.setAttribute('role', 'dialog'); el.setAttribute('aria-modal', 'true'); el.setAttribute('aria-label', 'Purse is locked'); el.tabIndex = -1;
+  lockEl = el;
+  const broken = !!lockCfg.broken;
+  el.innerHTML = `<div class="brand"><i aria-hidden="true"></i>Purse</div><div class="lock-body"><h1 data-title>${broken ? 'Passcode problem' : 'Enter your passcode'}</h1>${broken ? '<p class="muted" style="text-align:center;max-width:300px">The saved passcode could not be read. You can reset Purse to get back in.</p>' : padHTML(lockCfg.len)}</div><button type="button" class="btn ghost" data-forgot>${broken ? 'Reset Purse' : 'Forgot passcode?'}</button>`;
+  $('#app').appendChild(el); updateInert();
+  let busy = false;
+  const stopCount = () => { clearInterval(lockCountdown); lockCountdown = null; };
+  const showWait = ms => {
+    stopCount(); pad.disable(true);
+    const tick = () => { const left = lockCfg.lockoutUntil - Date.now(); if (left <= 0) { stopCount(); pad.error(''); pad.disable(false); return; } pad.error(`Too many tries. Try again in ${fmtWait(left)}.`); };
+    tick(); lockCountdown = setInterval(tick, 500);
+  };
+  const pad = broken ? { disable() { }, error() { }, clear() { }, shake() { } } : mountPad(el, {
+    dots: lockCfg.len, max: lockCfg.len,
+    onInput: async d => {
+      if (d.length < lockCfg.len || busy) return;
+      busy = true; pad.disable(true);
+      const r = await attemptPin(d);
+      busy = false;
+      if (r.ok) { unlock(); return; }
+      pad.shake(); pad.clear();
+      if (r.wait) showWait(r.wait); else { pad.disable(false); pad.error(`Wrong passcode. ${r.left} ${r.left === 1 ? 'try' : 'tries'} left before a pause.`); }
+    }
+  });
+  if (!broken) { activePad = pad; if (lockCfg.lockoutUntil > Date.now()) showWait(lockCfg.lockoutUntil - Date.now()); }
+  el.addEventListener('click', e => { if (e.target.closest('[data-forgot]')) showForgot(); });
+  function showForgot() {
+    stopCount(); activePad = null;
+    el.innerHTML = `<div class="brand"><i aria-hidden="true"></i>Purse</div><div class="lock-body"><h1>Reset Purse?</h1><p class="muted" style="text-align:center;max-width:320px;line-height:1.5">Purse cannot recover a forgotten passcode, because it is never stored. To get back in, all records on this phone must be erased and the passcode removed. If you have a backup file, you can restore it afterwards.</p></div>
+      <div class="stack" style="width:100%;max-width:360px"><button type="button" class="btn danger block" data-wipe>Erase everything and reset</button><button type="button" class="btn soft block" data-back>Go back</button></div>`;
+    el.focus({ preventScroll: true });
+    el.onclick = e => {
+      if (e.target.closest('[data-back]')) { lockEl.remove(); lockEl = null; showLockScreen(); }
+      else if (e.target.closest('[data-wipe]')) wipeEverything();
+    };
+  }
+  el.focus({ preventScroll: true });
+}
+function unlock() {
+  locked = false; clearInterval(lockCountdown); lockCountdown = null; activePad = null;
+  if (lockEl) { lockEl.remove(); lockEl = null; }
+  lastActive = Date.now(); persistActive(true);
+  updateInert();
+  const go = postUnlock; postUnlock = null; if (go) go(); else render();
+}
+function lock() {
+  if (!lockCfg || locked) return;
+  locked = true; lockCfg.lastActive = 0; saveLock();   // stored, so closing and reopening the app while locked stays locked
+  while (layers.length) removeLayer(layers.pop());
+  history.replaceState({ d: 0, tab: ui.tab }, '');
+  $('#toast').innerHTML = ''; $('#view').innerHTML = ''; $('#tabbar').innerHTML = '';
+  hideShield(); showLockScreen(); updateInert();
+}
+/* Used by "Forgot passcode": removes every trace of the records, then returns to first-run setup. */
+function wipeEverything() {
+  [KEY, KEY_PREV, KEY_UNDO, KEY_CORRUPT, KEY_LOCK].forEach(k => { try { localStorage.removeItem(k); } catch (e) { /* ignore */ } });
+  lockCfg = null; locked = false; clearInterval(lockTimer); lockTimer = null; clearInterval(lockCountdown); lockCountdown = null; activePad = null;
+  if (lockEl) { lockEl.remove(); lockEl = null; }
+  S = freshState(); persist();
+  afterDataSwap(); showWelcomeGate();
+  toast('Purse was reset');
+}
+
+/* ---------- privacy cover (so the phone's app switcher never shows your records) ---------- */
+function showShield() { if (shieldEl || locked) return; shieldEl = document.createElement('div'); shieldEl.className = 'lockscreen shield'; shieldEl.innerHTML = '<div class="brand"><i aria-hidden="true"></i>Purse</div>'; $('#app').appendChild(shieldEl); }
+function hideShield() { if (shieldEl) { shieldEl.remove(); shieldEl = null; } }
+
+/* ---------- when to lock ---------- */
+function idleLimit() { return lockCfg && !lockCfg.broken && lockCfg.timeout > 0 ? lockCfg.timeout * 60000 : 0; }
+function lockIfIdle() {
+  if (!lockCfg || locked || lockPause > 0) return;
+  const lim = idleLimit(), gap = Date.now() - lastActive;
+  if (lim && (gap >= lim || gap < 0)) lock();        // gap < 0: the clock was moved back, so be safe
+}
+function noteActivity() { lastActive = Date.now(); }
+['pointerdown', 'keydown', 'touchstart', 'scroll', 'input'].forEach(ev => document.addEventListener(ev, noteActivity, { capture: true, passive: true }));
+function startLockWatch() {
+  if (lockTimer) return;
+  lockTimer = setInterval(() => { if (!lockCfg) return; lockIfIdle(); if (!locked) persistActive(false); }, 5000);
+}
+document.addEventListener('visibilitychange', () => {
+  if (!lockCfg) return;
+  if (document.hidden) {
+    lastActive = Date.now(); persistActive(true);
+    if (!locked && lockPause === 0 && lockCfg.timeout === 0) lock(); else showShield();
+  } else {
+    hideShield();
+    if (lockPause > 0) { lastActive = Date.now(); return; }
+    lockIfIdle();
+  }
+});
+window.addEventListener('pagehide', () => { if (lockCfg && !locked) { lastActive = Date.now(); persistActive(true); } });
+/* The phone's file picker and share sheet take the app to the background. Do not lock because of those. */
+async function withoutAutoLock(promise) { lockPause++; try { return await promise; } finally { lastActive = Date.now(); setTimeout(() => { lockPause = Math.max(0, lockPause - 1); }, 1500); } }
+
+/* ---------- setup, change, turn off ---------- */
+function openPinSetup({ title, onDone }) {
+  let first = null, root, pad;
+  const body = `<div class="pinwrap"><p class="muted" data-help style="text-align:center">Choose ${PIN_MIN} to ${PIN_MAX} digits.</p>${padHTML(PIN_MAX)}<button type="button" class="btn primary block" data-next disabled style="max-width:360px">Continue</button></div>`;
+  openPage({
+    title, body,
+    onClose: () => { if (activePad === pad) activePad = null; },
+    onMount: el => {
+      root = el;
+      const next = $('[data-next]', el), help = $('[data-help]', el);
+      pad = mountPad(el, {
+        dots: PIN_MAX, max: PIN_MAX,
+        onInput: d => {
+          pad.error('');
+          if (first === null) { next.disabled = d.length < PIN_MIN; return; }
+          if (d.length < first.length) return;
+          if (d === first) { const pin = first; pad.disable(true); closeLayer().then(() => onDone(pin)); }
+          else { pad.shake(); pad.clear(); first = null; pad.setDots(PIN_MAX); help.textContent = `Those did not match. Choose ${PIN_MIN} to ${PIN_MAX} digits again.`; next.hidden = false; next.disabled = true; }
+        }
+      });
+      activePad = pad;
+      next.addEventListener('click', () => {
+        if (pad.digits.length < PIN_MIN) return;
+        first = pad.digits; pad.clear(); pad.setDots(first.length); help.textContent = 'Enter it again to confirm.'; next.hidden = true;
+      });
+    }
+  });
+}
+function openPinVerify({ title, onOk }) {
+  let pad;
+  openPage({
+    title, body: `<div class="pinwrap"><p class="muted" style="text-align:center">Enter your current passcode.</p>${padHTML(lockCfg.len)}</div>`,
+    onClose: () => { if (activePad === pad) activePad = null; clearInterval(lockCountdown); lockCountdown = null; },
+    onMount: el => {
+      let busy = false;
+      const showWait = () => {
+        clearInterval(lockCountdown); pad.disable(true);
+        const tick = () => { const left = lockCfg.lockoutUntil - Date.now(); if (left <= 0) { clearInterval(lockCountdown); lockCountdown = null; pad.error(''); pad.disable(false); return; } pad.error(`Too many tries. Try again in ${fmtWait(left)}.`); };
+        tick(); lockCountdown = setInterval(tick, 500);
+      };
+      pad = mountPad(el, {
+        dots: lockCfg.len, max: lockCfg.len,
+        onInput: async d => {
+          if (d.length < lockCfg.len || busy) return;
+          busy = true; pad.disable(true);
+          const r = await attemptPin(d); busy = false;
+          if (r.ok) { closeLayer().then(onOk); return; }
+          pad.shake(); pad.clear();
+          if (r.wait) showWait(); else { pad.disable(false); pad.error(`Wrong passcode. ${r.left} ${r.left === 1 ? 'try' : 'tries'} left before a pause.`); }
+        }
+      });
+      activePad = pad;
+      if (lockCfg.lockoutUntil > Date.now()) showWait();
+    }
+  });
+}
+function lockChanged() { layers.forEach(l => l.refresh && l.refresh()); render(); }
+function enableLock() {
+  if (!lockSupported()) return toast('Passcode lock needs a secure connection (https).', { kind: 'bad' });
+  openPinSetup({ title: 'Set a passcode', onDone: async pin => { lockCfg = await makeLock(pin); lastActive = Date.now(); saveLock(); startLockWatch(); lockChanged(); toast('Passcode lock is on'); } });
+}
+function changePasscode() {
+  openPinVerify({ title: 'Change passcode', onOk: () => openPinSetup({ title: 'New passcode', onDone: async pin => { lockCfg = await makeLock(pin, lockCfg); saveLock(); lockChanged(); toast('Passcode changed'); } }) });
+}
+function disableLock() {
+  openPinVerify({ title: 'Turn off lock', onOk: async () => {
+    const ok = await dialog({ title: 'Turn off passcode lock?', body: 'Anyone who opens Purse on this phone will be able to see your records.', actions: [{ label: 'Turn off', kind: 'danger', value: true }, { label: 'Keep it on', kind: 'soft', value: false }] });
+    if (!ok) return;
+    try { localStorage.removeItem(KEY_LOCK); } catch (e) { /* ignore */ }
+    lockCfg = null; clearInterval(lockTimer); lockTimer = null; hideShield(); lockChanged(); toast('Passcode lock is off');
+  } });
+}
+function openAutoLockSheet() {
+  openSheet({
+    title: 'Lock the app',
+    body: `<div class="card list" role="radiogroup" aria-label="When to lock">${LOCK_TIMEOUTS.map(([m, l]) => `<button type="button" class="row" role="radio" aria-checked="${lockCfg.timeout === m}" data-t="${m}"><span class="mid"><span class="t">${l}</span>${m === 0 ? '<span class="s">Also when you switch to another app</span>' : '<span class="s">When you have not touched Purse for this long</span>'}</span>${lockCfg.timeout === m ? `<span class="pos">${ico('check', 22)}</span>` : ''}</button>`).join('')}</div>`,
+    onMount: el => el.addEventListener('click', e => { const b = e.target.closest('[data-t]'); if (!b) return; lockCfg.timeout = +b.dataset.t; lastActive = Date.now(); saveLock(); closeLayer().then(() => { lockChanged(); toast(`Locks ${LOCK_TIMEOUTS.find(x => x[0] === lockCfg.timeout)[1].toLowerCase()}`); }); })
+  });
+}
 /* =====================================================================
    8. FIRST RUN AND RECOVERY SCREENS
    ===================================================================== */
@@ -1597,21 +1991,36 @@ function registerSW() {
 function boot() {
   const r = loadState();
   history.replaceState({ d: 0, tab: 'home' }, '');
-  if (r.note === 'corrupt') { showCorruptGate(r.corruptRaw); registerSW(); return; }
-  S = r.state;
-  applyTheme();
-  if (r.note === 'recovered') { try { localStorage.setItem(KEY_CORRUPT, r.corruptRaw); } catch (e) { /* ignore */ } persist(); }
-  if (!S.settings.onboarded) showWelcomeGate(); else render();
-  if (r.note === 'recovered') toast('Your latest save could not be read, so the previous copy was restored.', { kind: 'warn', ms: 8000 });
-  registerSW();
+  lockCfg = loadLock();
+  const start = () => {
+    if (r.note === 'corrupt') { showCorruptGate(r.corruptRaw); return; }
+    if (!S.settings.onboarded) showWelcomeGate(); else render();
+    if (r.note === 'recovered') toast('Your latest save could not be read, so the previous copy was restored.', { kind: 'warn', ms: 8000 });
+  };
+  if (r.note !== 'corrupt') { S = r.state; applyTheme(); if (r.note === 'recovered') { try { localStorage.setItem(KEY_CORRUPT, r.corruptRaw); } catch (e) { /* ignore */ } persist(); } }
+  if (lockCfg) {
+    /* Decide at launch: lock if the chosen idle time has passed, or if it is set to lock every time. */
+    const gap = Date.now() - (lockCfg.lastActive || 0), lim = idleLimit();
+    startLockWatch();
+    if (lockCfg.broken || !lim || gap >= lim || gap < 0) { locked = true; postUnlock = start; showLockScreen(); registerSW(); return; }
+    lastActive = Date.now();
+  }
+  start(); registerSW();
 }
 /* Another window (for example the installed app and a browser tab) changed the data.
    Reload it so this window never overwrites those changes with stale data. */
 window.addEventListener('storage', e => {
+  if (e.key === KEY_LOCK) {
+    const was = !!lockCfg; lockCfg = loadLock();
+    if (lockCfg && !was) startLockWatch();
+    if (!lockCfg && locked) unlock();
+    return;
+  }
   if (e.key !== KEY || !S || e.newValue === null) return;
   let v; try { v = validateData(JSON.parse(e.newValue)); } catch (x) { return; }
   if (!v.ok) return;
   S = v.data; applyTheme();
+  if (locked) return;
   while (layers.length) removeLayer(layers.pop());
   history.replaceState({ d: 0, tab: ui.tab }, ''); updateInert();
   if (!$('.gate')) { render(); toast('Updated from another window'); }

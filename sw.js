@@ -1,7 +1,7 @@
 /* Purse service worker. Cache-first shell so the app opens offline after one visit.
-   557b9a7e8b is replaced at build time, so each release gets its own cache and
+   e7ba737661 is replaced at build time, so each release gets its own cache and
    the old one is deleted on activate (no stale versions). */
-const CACHE = 'purse-557b9a7e8b';
+const CACHE = 'purse-e7ba737661';
 const SHELL = ['./', 'index.html', 'manifest.webmanifest', 'icons/icon-192.png', 'icons/icon-512.png', 'icons/icon-maskable-512.png', 'icons/apple-touch-icon.png'];
 
 self.addEventListener('install', e => {
